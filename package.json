@@ -1,0 +1,39 @@
+{
+  "name": "texas-holdem-house",
+  "version": "0.1.0",
+  "description": "A texas holdem server",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "compile": "tsc",
+    "clean": "rm -rf dist",
+    "lint": "tslint --project .",
+    "purge": "rm -rf package-lock.json node_modules && npm run clean",
+    "prepublishOnly": "npm run clean && npm run compile",
+    "prettier": "prettier --config .prettierrc --write '**/*'"
+  },
+  "author": "themez",
+  "dependencies": {
+    "debug": "^4.1.1",
+    "lodash": "^4.17.11",
+    "node-texas-evaluator": "^0.1.1",
+    "shortid": "^2.2.14",
+    "source-map-support": "0.5.9"
+  },
+  "devDependencies": {
+    "@types/debug": "^4.1.4",
+    "@types/lodash": "^4.14.118",
+    "@types/node": "^10.12.10",
+    "@types/shortid": "0.0.29",
+    "husky": "1.2.0",
+    "prettier": "1.15.2",
+    "pretty-quick": "1.8.0",
+    "tslint": "5.11.0",
+    "tslint-config-prettier": "1.17.0",
+    "typescript": "^3.5.0"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "pretty-quick --staged"
+    }
+  }
+}
