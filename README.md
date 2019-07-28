@@ -40,12 +40,12 @@ startGame([...builtInPlayers, new MyPlayer('MySeasonedPlayer')])
 
 - For clockwise direction dealder followed by small blind, big blind
 - deal from small blind
-- first round betting start from the one next to big blind, big blind is the last one to action
+- first round betting start from the one next to big blind, big blind is the last one to action, second/third/fourth round betting start from small blind
 - player can only raise multiple to previous bet
 
 ## 德州扑克规则
 
 - 顺时针，dealer 左边依次是小盲，大盲
 - 从小盲开始发牌
-- 从大盲左边一位开始行动，到大盲最后一个 call/raise
+- 第一轮从大盲左边一位开始行动，到大盲最后一个 call/raise，后面轮次从小盲开始行动
 - 每轮 raise 必须是 bet 的整数倍

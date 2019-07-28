@@ -13,7 +13,16 @@ import {
   EvaluateEvent,
 } from './model'
 import _ = require('lodash')
-import shortid = require('shortid')
+import util = require('util')
+
+import readline = require('readline')
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+})
+
+const question = util.promisify(rl.question.bind(rl)) as (q: string) => Promise<string>
 
 class Croupier {
   deck: string[]
@@ -54,11 +63,11 @@ class Croupier {
     }
 
     if (shouldBet && playerState.chips > 0) {
-      actions.push({ action: 'bet', amount: Math.min(currentBet, playerState.chips) })
+      actions.push({ action: 'bet', amount: Math.min(BLIND * 2, playerState.chips) })
     }
 
-    if (playerState.bet > 0 && !shouldBet) {
-      actions.push({ action: 'raise', amount: Math.min(currentBet, playerState.chips) })
+    if (playerState.chips > 0 && !shouldBet) {
+      actions.push({ action: 'raise', amount: Math.min(BLIND * 2, playerState.chips) })
     }
 
     let action = await player.action(actions)
@@ -74,7 +83,7 @@ class Croupier {
     }
     if (
       action.action === 'bet' &&
-      action.amount! % currentBet !== 0 &&
+      action.amount! % (BLIND * 2) !== 0 &&
       action.amount !== playerState.chips
     ) {
       console.log('force fold for invalid action %O %O', action, playerState)
@@ -82,7 +91,7 @@ class Croupier {
     }
     if (
       action.action === 'raise' &&
-      action.amount! % currentBet !== 0 &&
+      action.amount! % (BLIND * 2) !== 0 &&
       action.amount !== playerState.chips
     ) {
       console.log('force fold for invalid action %O %O', action, playerState)
@@ -98,7 +107,7 @@ class Croupier {
       case 'raise':
         playerState.bet += action.amount!
         playerState.chips -= action.amount!
-        this.tableState.pot += action.amount!
+        // this.tableState.pot += action.amount!
         break
       case 'check':
       default:
@@ -106,39 +115,70 @@ class Croupier {
     console.log(
       `${player.name} act ${action.action} ${action.amount || ''} bet ${playerState.bet} chips ${
         playerState.chips
-      } pot ${this.tableState.pot}`,
+      }`,
     )
-    // broadcast
-    this.tableState.setPlayerStates(this.playerStates)
+
     this.tableState.emit('event', new ActionEvent(this.tableState, action))
     return action
   }
 
+  collectBet() {
+    let playersToCollect = this.playerStates.filter(state => state.bet > 0)
+    let leastPlayer = _.minBy(playersToCollect, state => state.bet)
+
+    // some one betted
+    while (leastPlayer) {
+      const leastBet = leastPlayer!.bet
+      let lastPot = _.last(this.tableState.pots)
+      if (
+        !lastPot ||
+        // last pot should be sealed if some one ALLIN-ed last round
+        (lastPot.contributors.length !== 0 && lastPot.contributors.length > playersToCollect.length)
+      ) {
+        lastPot = { amount: 0, contributors: [] }
+        this.tableState.pots.push(lastPot)
+      }
+      lastPot.amount += leastBet * playersToCollect.length
+      lastPot.contributors = playersToCollect.map(state => state.playerPosition)
+      playersToCollect.forEach(state => (state.bet -= leastBet))
+
+      this.tableState.pot += leastBet * playersToCollect.length
+
+      playersToCollect = this.playerStates.filter(state => state.bet > 0)
+      leastPlayer = _.minBy(playersToCollect, state => state.bet)
+    }
+    console.log('current pot', this.tableState.pot, this.tableState.pots)
+    // broadcast
+    this.tableState.setPlayerStates(this.playerStates)
+  }
   async bet(firstIndex: number) {
     let startIndex = firstIndex
     const playerCnt = this.playerStates.length
+
     for (let i = 0; i < playerCnt; i++) {
       const playerIndex = (i + startIndex) % playerCnt
       const action = await this.doAction(
         playerIndex,
-        playerIndex === firstIndex && this.tableState.board.length > 0,
+        playerIndex === startIndex && this.tableState.board.length > 0,
       )
       if (!action) {
         continue
       }
       // if raised continue round
       if (action.action === 'raise') {
-        startIndex = i
+        startIndex = playerIndex
         i = 0
       }
       // if fold check winning
       if (action.action === 'fold') {
         if (this.playerStates.filter(state => !state.folded).length === 1) {
+          this.collectBet()
           this.splitPot(this.playerStates.filter(state => !state.folded))
           return true
         }
       }
     }
+    this.collectBet()
     return false
   }
 
@@ -176,25 +216,24 @@ class Croupier {
   }
 
   private splitPot(winners: PlayerState[]) {
-    const winnerCnt = winners.length
-    const maxWinnerBet = _.max(winners.map(state => state.bet))!
-    const winningAmounts = winners.map(winner =>
-      this.playerStates.reduce((total, state) => {
-        return total + Math.min(state.bet, winner.bet) / winnerCnt
-      }, 0),
-    )
-    this.playerStates.forEach(state => {
-      if (state.bet > maxWinnerBet) {
-        state.chips += state.bet - maxWinnerBet
+    const winnerPositions = winners.map(winner => winner.playerPosition)
+    let currentPot = this.tableState.pots.shift()
+    while (currentPot) {
+      const sharePositions = _.intersection(winnerPositions, currentPot.contributors)
+      if (sharePositions.length) {
+        const share = currentPot.amount / sharePositions.length
+        sharePositions.forEach(pos => {
+          this.playerStates[pos].chips += share
+        })
+      } else {
+        // return bet
+        currentPot.contributors.forEach(pos => {
+          this.playerStates[pos].chips += currentPot!.amount / currentPot!.contributors.length
+        })
       }
+      currentPot = this.tableState.pots.shift()
+    }
 
-      state.bet = 0
-      state.folded = false
-      state.pocket = undefined
-    })
-    winners.forEach((winner, i) => {
-      winner.chips += winningAmounts[i]
-    })
     this.tableState.setPlayerStates(this.playerStates)
 
     console.log(`${_.map(winners, 'playerName').join(', ')} win`)
@@ -233,6 +272,7 @@ class Croupier {
     this.playerStates.forEach((state, i) => (state.role = roles[i]))
     console.log(
       'Game started ',
+      _.sumBy(this.playerStates, state => state.chips),
       this.playerStates
         .map(
           state => `${state.playerName}${state.role ? '(' + state.role + ')' : ''}[${state.chips}]`,
@@ -245,13 +285,24 @@ class Croupier {
     this.deck = texas.deck(texas.abbr)
     this.tableState.board = []
     this.tableState.pot = 0
+    this.tableState.pots = []
+
     _.remove(this.players, (_player, i) => this.playerStates[i].chips === 0)
     _.remove(this.playerStates, state => state.chips === 0)
+    this.players.forEach((player, i) => (player.position = i))
+    this.playerStates.forEach((state, i) => (state.playerPosition = i))
+
+    this.playerStates.forEach(state => {
+      state.folded = false
+      state.pocket = undefined
+    })
   }
 }
 
 const CHIPS = 2000
 const BLIND = 50
+
+let STEP = process.env.STEP
 
 export async function run(players: Player[]) {
   const playerCnt = players.length
@@ -265,11 +316,11 @@ export async function run(players: Player[]) {
   players = _.shuffle(players)
   // init players
   players.forEach((player, i) => {
-    player._id = shortid.generate()
+    player.position = i
     player.name = player.name || `player-${i}`
     player.join(tableState, i)
   })
-  const playerStates = players.map(player => new PlayerState(player._id!, player.name, CHIPS))
+  const playerStates = players.map(player => new PlayerState(player.position!, player.name, CHIPS))
 
   const croupier = new Croupier(tableState, players, playerStates)
   let round = 0
@@ -289,13 +340,11 @@ export async function run(players: Player[]) {
           bet = Math.min(BLIND, playerState.chips)
           playerState.chips -= bet
           playerState.bet += bet
-          tableState.pot += bet
           break
         case 'BB':
           bet = Math.min(BLIND * 2, playerState.chips)
           playerState.chips -= bet
           playerState.bet += bet
-          tableState.pot += bet
           break
         default:
           playerState.role = null
@@ -314,9 +363,9 @@ export async function run(players: Player[]) {
     croupier.deal()
 
     // first round betting start from the one next to BB
+    const sbPlayerIndex = _.findIndex(playerStates, state => state.role === 'SB')
     const bbPlayerIndex = _.findIndex(playerStates, state => state.role === 'BB')
-    const firstPlayerIndex = (bbPlayerIndex + 1) % playerCnt
-    let shutdown = await croupier.bet(firstPlayerIndex)
+    let shutdown = await croupier.bet((bbPlayerIndex + 1) % playerCnt)
 
     if (shutdown) {
       round += 1
@@ -327,7 +376,7 @@ export async function run(players: Player[]) {
     croupier.draw('flop')
 
     // second round betting
-    shutdown = await croupier.bet(firstPlayerIndex)
+    shutdown = await croupier.bet(sbPlayerIndex)
     if (shutdown) {
       round += 1
       continue
@@ -337,7 +386,7 @@ export async function run(players: Player[]) {
     croupier.draw('turn')
 
     // third round betting
-    shutdown = await croupier.bet(firstPlayerIndex)
+    shutdown = await croupier.bet(sbPlayerIndex)
     if (shutdown) {
       round += 1
       continue
@@ -346,7 +395,7 @@ export async function run(players: Player[]) {
     croupier.draw('river')
 
     // fourth round betting
-    shutdown = await croupier.bet(firstPlayerIndex)
+    shutdown = await croupier.bet(sbPlayerIndex)
     if (shutdown) {
       round += 1
       continue
@@ -354,10 +403,16 @@ export async function run(players: Player[]) {
     // shutdown this round
     croupier.shutdown()
     round += 1
+    if (STEP) {
+      const control = await question('continue?').catch(e => e)
+      if (control === 'a') {
+        STEP = undefined
+      }
+    }
   }
   croupier.cleanTable()
   console.log('winner is', playerStates[0].playerName, playerStates[0].chips)
 
   // return winner
-  return _.find(players, player => player._id === playerStates[0].playerId)!
+  return players[0]
 }

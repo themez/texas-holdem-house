@@ -75,11 +75,12 @@ export class PlayerState implements PlayerPublicState {
   public role: Role = null
   public bet: number = 0
   public folded: boolean = false
-  constructor(public playerId: string, public playerName: string, public chips: number) {}
+  constructor(public playerPosition: number, public playerName: string, public chips: number) {}
 }
 
 export class Table extends EventEmitter {
   pot = 0
+  pots: { amount: number; contributors: number[] }[] = [] // record side pots
   playerPublicStates: PlayerPublicState[] = []
   board: Card[] = []
   setPlayerStates(playStates: PlayerState[]) {
@@ -142,9 +143,9 @@ export interface Action {
  * For watching game and do action
  */
 export abstract class Player {
-  _id?: string
+  position?: number
   constructor(public name: string) {}
-  abstract join(event: EventEmitter, position: number): void
+  abstract join(event: Table, position: number): void
   abstract deal(cards: [Card, Card]): void
   abstract async action(actionList: Action[]): Promise<Action>
 }
